@@ -4,6 +4,8 @@
  */
 package network.project;
 
+
+
 import java.io.*;
 import java.net.Socket;
 import java.util.ArrayList;
@@ -26,32 +28,43 @@ class NewClient implements Runnable {
     @Override
     public void run() {
         try {
-            // Ask for the player's name
             out.println("Enter your name:");
             playerName = in.readLine();
-
+            if (playerName == null || playerName.trim().isEmpty()) {
+                playerName = "Unknown";
+            }
             synchronized (playerNames) {
                 playerNames.add(playerName);
             }
-
             System.out.println(playerName + " has joined the game.");
             sendPlayerList();
 
-            while (true) {
-                String request = in.readLine();
-                if (request == null) break;
+            String request;
+            while ((request = in.readLine()) != null) {
+                System.out.println("Received from " + playerName + ": " + request);
+                if (request.equalsIgnoreCase("LEAVE")) {
+                    break;
+                }
                 broadcastMessage(playerName + ": " + request);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            System.out.println("Connection lost with " + playerName);
         } finally {
-            synchronized (playerNames) {
+            handleDisconnect();
+        }
+    }
+
+    private void handleDisconnect() {
+        synchronized (playerNames) {
+            if (playerName != null) {
                 playerNames.remove(playerName);
             }
-            clients.remove(this);
-            sendPlayerList();
-            closeResources();
         }
+        clients.remove(this);
+        sendPlayerList();
+        broadcastMessage(playerName + " has left the game.");
+        closeResources();
+        System.out.println("Cleanup complete for " + playerName);
     }
 
     private void broadcastMessage(String message) {
@@ -66,8 +79,9 @@ class NewClient implements Runnable {
         }
     }
 
+    // Here, we use the prefix "CONNECTED:" so that clients update their GUI accordingly.
     private void sendPlayerList() {
-        String playerList = "Players in the game: " + String.join(", ", playerNames);
+        String playerList = "CONNECTED:" + String.join(",", playerNames);
         for (NewClient client : clients) {
             client.sendMessage(playerList);
         }
@@ -77,7 +91,7 @@ class NewClient implements Runnable {
         try {
             if (out != null) out.close();
             if (in != null) in.close();
-            if (client != null) client.close();
+            if (client != null && !client.isClosed()) client.close();
         } catch (IOException e) {
             e.printStackTrace();
         }

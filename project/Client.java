@@ -1,11 +1,12 @@
 package network.project;
 
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.*;
-import java.net.Socket;
-import java.util.HashSet;
+import java.net.*;
+import java.util.*;
 
 public class Client extends JFrame {
     private DefaultListModel<String> connectedListModel;
@@ -20,55 +21,60 @@ public class Client extends JFrame {
     private JTextField inputField;
     private JButton submitButton;
     private JLabel messageLabel;
-    private JLabel timerLabel; // لعرض المؤقت
+    private JLabel timerLabel;
     private HashSet<String> allConnectedPlayers = new HashSet<>();
     private PrintWriter out;
     private BufferedReader in;
-    private int currentStage = 1; // تتبع المرحلة الحالية
-private int score = 0; // النقاط
-private JLabel scoreLabel; // لعرض النقاط
-
+    private int currentStage = 1;
+    private int score = 0;
+    private JLabel scoreLabel;
 
     public Client() {
-        setTitle("Game Client");
-        setSize(600, 500);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
+    setTitle("Game Client");
+    setSize(600, 500);
+    setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    setLocationRelativeTo(null);
+    setLayout(new BorderLayout());
+    
+    // Create a message label for notifications
+    messageLabel = new JLabel("", SwingConstants.CENTER);
+    messageLabel.setFont(new Font("Arial", Font.PLAIN, 16));
+    
+    connectedPanel = new JPanel(new BorderLayout());
+    connectedPanel.setBorder(BorderFactory.createTitledBorder("Connected Players"));
+    connectedListModel = new DefaultListModel<>();
+    connectedList = new JList<>(connectedListModel);
+    connectedList.setFont(new Font("Arial", Font.PLAIN, 18));
+    connectedPanel.add(new JScrollPane(connectedList), BorderLayout.CENTER);
+    
+    // Add the messageLabel to the connected panel (for example, at the top)
+    connectedPanel.add(messageLabel, BorderLayout.NORTH);
+    
+    playButton = new JButton("Play");
+    playButton.setFont(new Font("Arial", Font.BOLD, 20));
+    playButton.addActionListener((ActionEvent e) -> {
+        out.println("READY");
+        switchToWaitingRoom();
+    });
+    connectedPanel.add(playButton, BorderLayout.SOUTH);
+    
+    waitingPanel = new JPanel(new BorderLayout());
+    waitingPanel.setBorder(BorderFactory.createTitledBorder("Waiting Room"));
+    waitingListModel = new DefaultListModel<>();
+    waitingList = new JList<>(waitingListModel);
+    waitingList.setFont(new Font("Arial", Font.PLAIN, 18));
+    waitingPanel.add(new JScrollPane(waitingList), BorderLayout.CENTER);
+    
+    timerLabel = new JLabel("Timer: Not started", SwingConstants.CENTER);
+    timerLabel.setFont(new Font("Arial", Font.BOLD, 24));
+    waitingPanel.add(timerLabel, BorderLayout.NORTH);
+    
+    add(connectedPanel, BorderLayout.CENTER);
+    connectToServer();
+    
+    setVisible(true);
+}
 
-        // Connected players panel
-        connectedPanel = new JPanel(new BorderLayout());
-        connectedPanel.setBorder(BorderFactory.createTitledBorder("Connected Players"));
-        connectedListModel = new DefaultListModel<>();
-        connectedList = new JList<>(connectedListModel);
-        connectedList.setFont(new Font("Arial", Font.PLAIN, 18));
-        connectedPanel.add(new JScrollPane(connectedList), BorderLayout.CENTER);
-
-        playButton = new JButton("Play");
-        playButton.setFont(new Font("Arial", Font.BOLD, 20));
-        playButton.addActionListener((ActionEvent e) -> {
-            out.println("READY");
-            switchToWaitingRoom();
-        });
-        connectedPanel.add(playButton, BorderLayout.SOUTH);
-
-        // Waiting room panel
-        waitingPanel = new JPanel(new BorderLayout());
-        waitingPanel.setBorder(BorderFactory.createTitledBorder("Waiting Room"));
-        waitingListModel = new DefaultListModel<>();
-        waitingList = new JList<>(waitingListModel);
-        waitingList.setFont(new Font("Arial", Font.PLAIN, 18));
-        waitingPanel.add(new JScrollPane(waitingList), BorderLayout.CENTER);
-
-        timerLabel = new JLabel("Timer: Not started", SwingConstants.CENTER);
-        timerLabel.setFont(new Font("Arial", Font.BOLD, 24));
-        waitingPanel.add(timerLabel, BorderLayout.NORTH); // إضافة المؤقت للواجهة
-
-        add(connectedPanel, BorderLayout.CENTER);
-        connectToServer();
-
-        setVisible(true);
-    }
 
     private void connectToServer() {
         try {
@@ -92,7 +98,15 @@ private JLabel scoreLabel; // لعرض النقاط
                             SwingUtilities.invokeLater(() -> timerLabel.setText("Timer: " + timeRemaining + " seconds remaining"));
                         } else if (serverMessage.equals("GAME_STARTED")) {
                             SwingUtilities.invokeLater(this::switchToGame);
-                        }
+                        } else if (serverMessage.startsWith("PLAYER_LEFT:")) {
+    String leftPlayer = serverMessage.substring(12);
+    SwingUtilities.invokeLater(() -> {
+        if(messageLabel != null) {
+            messageLabel.setText(leftPlayer + " has left the game.");
+        }
+    });
+}
+
                     }
                 } catch (IOException e) {
                     JOptionPane.showMessageDialog(this, "Connection lost. Please restart the client.");
@@ -105,18 +119,20 @@ private JLabel scoreLabel; // لعرض النقاط
     }
 
     private void updateConnectedList(String players) {
-        SwingUtilities.invokeLater(() -> {
-            connectedListModel.clear();
-            for (String player : players.split(",")) {
-                if (!player.isEmpty()) {
-                    allConnectedPlayers.add(player);
-                }
+    SwingUtilities.invokeLater(() -> {
+        connectedListModel.clear();
+        // Clear the set to remove old players
+        allConnectedPlayers.clear();
+        for (String player : players.split(",")) {
+            if (!player.isEmpty()) {
+                allConnectedPlayers.add(player);
             }
-            for (String player : allConnectedPlayers) {
-                connectedListModel.addElement(player);
-            }
-        });
-    }
+        }
+        for (String player : allConnectedPlayers) {
+            connectedListModel.addElement(player);
+        }
+    });
+}
 
     private void updateWaitingList(String players) {
         SwingUtilities.invokeLater(() -> {
@@ -168,49 +184,41 @@ private JLabel scoreLabel; // لعرض النقاط
         gamePanel.add(messageLabel, gbc);
 
         scoreLabel = new JLabel("Score: 0", SwingConstants.CENTER);
-scoreLabel.setFont(new Font("Arial", Font.BOLD, 24));
-gbc.gridy = 4; // وضع الليبل أسفل الرسالة
-gamePanel.add(scoreLabel, gbc);
+        scoreLabel.setFont(new Font("Arial", Font.BOLD, 24));
+        gbc.gridy = 4;
+        gamePanel.add(scoreLabel, gbc);
 
-add(gamePanel, BorderLayout.CENTER);
+        add(gamePanel, BorderLayout.CENTER);
 
         revalidate();
         repaint();
     }
 
-   
-
-private void checkAnswer() {
-    String input = inputField.getText();
-    try {
-        int decimalValue = Integer.parseInt(input, 10);
-
-        if ((currentStage == 1 && decimalValue == 10) || (currentStage == 2 && decimalValue == 3)) {
-            score += 10; // إضافة 10 نقاط
-            scoreLabel.setText("Score: " + score); // تحديث عرض النقاط
-
-            if (score >= 20) {
-                messageLabel.setText("Congratulations! You won the game!");
-                submitButton.setEnabled(false); // تعطيل الزر بعد الفوز
-            } else if (currentStage == 1) {
-                messageLabel.setText("Correct! Moving to the next stage...");
-                binaryLabel.setText("Binary number: 0011"); // تغيير الرقم الثنائي
-                inputField.setText(""); // تفريغ الحقل
-                currentStage++; // الانتقال إلى المرحلة الثانية
+    private void checkAnswer() {
+        String input = inputField.getText();
+        try {
+            int decimalValue = Integer.parseInt(input, 10);
+            if ((currentStage == 1 && decimalValue == 10) || (currentStage == 2 && decimalValue == 3)) {
+                score += 10;
+                scoreLabel.setText("Score: " + score);
+                if (currentStage == 1) {
+                    messageLabel.setText("Correct! Moving to the next stage...");
+                    binaryLabel.setText("Binary number: 0011");
+                    inputField.setText("");
+                    currentStage++;
+                } else if (score >= 20) {
+                    messageLabel.setText("Congratulations! You won the game!");
+                    submitButton.setEnabled(false);
+                }
             } else {
-                messageLabel.setText("Correct! One more to win!");
+                messageLabel.setText("Incorrect! Try again.");
             }
-        } else {
-            messageLabel.setText("Incorrect! Try again.");
+        } catch (NumberFormatException e) {
+            messageLabel.setText("Please enter a valid decimal number.");
         }
-    } catch (NumberFormatException e) {
-        messageLabel.setText("Please enter a valid decimal number.");
     }
-}
-
-
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(Client::new);
+        new Client();
     }
 }

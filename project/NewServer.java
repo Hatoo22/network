@@ -11,8 +11,8 @@ public class NewServer {
     private static boolean isTimerRunning = false;
     private static Timer timer;
     private static int countdownSeconds = 30;
-    
-    // Map to hold each player's score
+
+    // خريطة لتخزين نقاط كل لاعب
     private static Map<String, Integer> scoreboard = new HashMap<>();
 
     public static void main(String[] args) {
@@ -31,7 +31,7 @@ public class NewServer {
         }
     }
 
-    // Updates all clients with the current connected and waiting lists.
+    // تحديث جميع العملاء بقوائم اللاعبين المتصلين والمنتظرين.
     private static void updateAllClients() {
         String connectedList = "CONNECTED:" + getConnectedPlayerNames();
         String waitingList = "WAITING:" + String.join(",", waitingRoom);
@@ -43,7 +43,7 @@ public class NewServer {
         }
     }
 
-    // Returns a comma-separated list of connected players.
+    // الحصول على قائمة الأسماء المتصلة كقائمة مفصولة بفواصل.
     private static String getConnectedPlayerNames() {
         List<String> names = new ArrayList<>();
         for (ClientHandler client : connectedPlayers) {
@@ -52,7 +52,7 @@ public class NewServer {
         return String.join(",", names);
     }
 
-    // Starts the game for all players in the waiting room.
+    // بدء اللعبة لجميع اللاعبين في غرفة الانتظار.
     private static synchronized void startGame() {
         String startMessage = "GAME_STARTED";
         for (String player : waitingRoom) {
@@ -66,7 +66,7 @@ public class NewServer {
         updateAllClients();
     }
 
-    // Checks whether the game should start.
+    // فحص ما إذا كان يمكن بدء اللعبة.
     private static synchronized void checkAndStartGame() {
         if (waitingRoom.size() == 4) {
             if (timer != null) {
@@ -79,10 +79,9 @@ public class NewServer {
         }
     }
 
-    // Starts the countdown timer.
+    // بدء عد تنازلي.
     private static void startCountdownTimer() {
-        if (isTimerRunning)
-            return;
+        if (isTimerRunning) return;
         isTimerRunning = true;
         countdownSeconds = 30;
         timer = new Timer();
@@ -107,15 +106,15 @@ public class NewServer {
             }
         }, 0, 1000);
     }
-    
-    // Broadcast the updated scoreboard to all connected clients.
+
+    // إرسال النقاط المحدثة لجميع العملاء.
     private static synchronized void broadcastScores() {
         StringBuilder sb = new StringBuilder("SCORES:");
         for (Map.Entry<String, Integer> entry : scoreboard.entrySet()) {
             sb.append(entry.getKey()).append(":").append(entry.getValue()).append(",");
         }
-        if (sb.length() > 0 && sb.charAt(sb.length()-1) == ',') {
-            sb.deleteCharAt(sb.length()-1);
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
         }
         String scoreMessage = sb.toString();
         synchronized (connectedPlayers) {
@@ -145,8 +144,8 @@ public class NewServer {
             try {
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 out = new PrintWriter(socket.getOutputStream(), true);
-                
-                // Ask for player's name
+
+                // طلب اسم اللاعب
                 out.println("ENTER_NAME");
                 playerName = in.readLine();
                 synchronized (scoreboard) {
@@ -155,7 +154,7 @@ public class NewServer {
                 synchronized (connectedPlayers) {
                     updateAllClients();
                 }
-                
+
                 String input;
                 while ((input = in.readLine()) != null) {
                     if (input.equals("READY")) {
@@ -168,19 +167,17 @@ public class NewServer {
                         }
                     } else if (input.equals("LEAVE")) {
                         break;
-                    } else if (input.startsWith("SCORE:")) {
+                    } else if (input.startsWith("UPDATE_SCORE:")) {
                         try {
-                            int newScore = Integer.parseInt(input.substring(6).trim());
-                            score = newScore;
+                            int newScore = Integer.parseInt(input.substring(13).trim());
                             synchronized (scoreboard) {
-                                scoreboard.put(playerName, score);
+                                scoreboard.put(playerName, newScore);
                             }
                             broadcastScores();
                         } catch (NumberFormatException e) {
-                            // Ignore invalid score updates.
+                            System.err.println("Invalid score format from " + playerName);
                         }
                     }
-                    // Process additional messages if needed...
                 }
             } catch (IOException e) {
                 System.out.println("Connection lost with " + playerName);
@@ -189,11 +186,10 @@ public class NewServer {
                     connectedPlayers.remove(this);
                     waitingRoom.remove(playerName);
                     updateAllClients();
-                    broadcastMessage(playerName + " has left the game.");
+                    broadcastScores();
                 }
                 synchronized (scoreboard) {
                     scoreboard.remove(playerName);
-                    broadcastScores();
                 }
                 try {
                     socket.close();
@@ -203,18 +199,9 @@ public class NewServer {
             }
         }
 
-        // Sends a message to this client.
+        // إرسال رسالة إلى هذا العميل.
         public void sendMessage(String message) {
             out.println(message);
-        }
-
-        // Broadcasts a message to all connected clients.
-        private void broadcastMessage(String message) {
-            synchronized (connectedPlayers) {
-                for (ClientHandler client : connectedPlayers) {
-                    client.sendMessage("PLAYER_LEFT:" + message);
-                }
-            }
         }
     }
 }

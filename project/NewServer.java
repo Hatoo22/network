@@ -11,15 +11,19 @@ public class NewServer {
     private static boolean isTimerRunning = false;
     private static Timer timer;
     private static int countdownSeconds = 30;
+    
+    // Map to hold each player's score
+    private static Map<String, Integer> scoreboard = new HashMap<>();
 
     public static void main(String[] args) {
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server started. Waiting for players...");
-            
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 ClientHandler clientHandler = new ClientHandler(clientSocket);
-                connectedPlayers.add(clientHandler);
+                synchronized (connectedPlayers) {
+                    connectedPlayers.add(clientHandler);
+                }
                 new Thread(clientHandler).start();
             }
         } catch (IOException e) {
@@ -27,18 +31,19 @@ public class NewServer {
         }
     }
 
-    // Updates all clients with the latest player lists
+    // Updates all clients with the current connected and waiting lists.
     private static void updateAllClients() {
         String connectedList = "CONNECTED:" + getConnectedPlayerNames();
         String waitingList = "WAITING:" + String.join(",", waitingRoom);
-
-        for (ClientHandler client : connectedPlayers) {
-            client.sendMessage(connectedList);
-            client.sendMessage(waitingList);
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                client.sendMessage(connectedList);
+                client.sendMessage(waitingList);
+            }
         }
     }
 
-    // Returns the names of connected players
+    // Returns a comma-separated list of connected players.
     private static String getConnectedPlayerNames() {
         List<String> names = new ArrayList<>();
         for (ClientHandler client : connectedPlayers) {
@@ -47,7 +52,7 @@ public class NewServer {
         return String.join(",", names);
     }
 
-    // Starts the game for all players in the waiting room
+    // Starts the game for all players in the waiting room.
     private static synchronized void startGame() {
         String startMessage = "GAME_STARTED";
         for (String player : waitingRoom) {
@@ -61,11 +66,11 @@ public class NewServer {
         updateAllClients();
     }
 
-    // Checks if the game can start (either by timer or full room)
+    // Checks whether the game should start.
     private static synchronized void checkAndStartGame() {
         if (waitingRoom.size() == 4) {
             if (timer != null) {
-                timer.cancel(); // Stop the timer if it is running
+                timer.cancel();
                 isTimerRunning = false;
             }
             startGame();
@@ -74,37 +79,50 @@ public class NewServer {
         }
     }
 
-    // Starts the countdown timer
+    // Starts the countdown timer.
     private static void startCountdownTimer() {
-        if (isTimerRunning) return;
-
+        if (isTimerRunning)
+            return;
         isTimerRunning = true;
         countdownSeconds = 30;
-
         timer = new Timer();
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
                 System.out.println("Timer: " + countdownSeconds + " seconds remaining");
-
-                // Send the timer value to all clients
-                for (ClientHandler client : connectedPlayers) {
-                    client.sendMessage("TIMER:" + countdownSeconds);
+                synchronized (connectedPlayers) {
+                    for (ClientHandler client : connectedPlayers) {
+                        client.sendMessage("TIMER:" + countdownSeconds);
+                    }
                 }
-
                 if (countdownSeconds > 0) {
-                    countdownSeconds--; // Decrease the timer
+                    countdownSeconds--;
                 } else {
-                    timer.cancel(); // Stop the timer when it reaches zero
+                    timer.cancel();
                     isTimerRunning = false;
-
-                    // Start the game if there are enough players
                     if (waitingRoom.size() >= 2) {
                         startGame();
                     }
                 }
             }
-        }, 0, 1000); // Run the timer every 1 second
+        }, 0, 1000);
+    }
+    
+    // Broadcast the updated scoreboard to all connected clients.
+    private static synchronized void broadcastScores() {
+        StringBuilder sb = new StringBuilder("SCORES:");
+        for (Map.Entry<String, Integer> entry : scoreboard.entrySet()) {
+            sb.append(entry.getKey()).append(":").append(entry.getValue()).append(",");
+        }
+        if (sb.length() > 0 && sb.charAt(sb.length()-1) == ',') {
+            sb.deleteCharAt(sb.length()-1);
+        }
+        String scoreMessage = sb.toString();
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                client.sendMessage(scoreMessage);
+            }
+        }
     }
 
     static class ClientHandler implements Runnable {
@@ -114,10 +132,11 @@ public class NewServer {
         private String playerName;
         private int score = 0;
 
-
         public ClientHandler(Socket socket) {
             this.socket = socket;
-        }public String getPlayerName() {
+        }
+
+        public String getPlayerName() {
             return playerName;
         }
 
@@ -126,14 +145,17 @@ public class NewServer {
             try {
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 out = new PrintWriter(socket.getOutputStream(), true);
-
+                
+                // Ask for player's name
                 out.println("ENTER_NAME");
                 playerName = in.readLine();
-
+                synchronized (scoreboard) {
+                    scoreboard.put(playerName, 0);
+                }
                 synchronized (connectedPlayers) {
                     updateAllClients();
                 }
-
+                
                 String input;
                 while ((input = in.readLine()) != null) {
                     if (input.equals("READY")) {
@@ -144,24 +166,34 @@ public class NewServer {
                                 checkAndStartGame();
                             }
                         }
+                    } else if (input.equals("LEAVE")) {
+                        break;
+                    } else if (input.startsWith("SCORE:")) {
+                        try {
+                            int newScore = Integer.parseInt(input.substring(6).trim());
+                            score = newScore;
+                            synchronized (scoreboard) {
+                                scoreboard.put(playerName, score);
+                            }
+                            broadcastScores();
+                        } catch (NumberFormatException e) {
+                            // Ignore invalid score updates.
+                        }
                     }
-                    if (input.equals("CORRECT_ANSWER")) { 
-    score += 10;
-    sendMessage("SCORE_UPDATED:" + score);
-
-    if (score >= 20) {
-        broadcastMessage(playerName + " has won the game!");
-    }
-}
-
+                    // Process additional messages if needed...
                 }
             } catch (IOException e) {
-                e.printStackTrace();
+                System.out.println("Connection lost with " + playerName);
             } finally {
                 synchronized (connectedPlayers) {
                     connectedPlayers.remove(this);
                     waitingRoom.remove(playerName);
                     updateAllClients();
+                    broadcastMessage(playerName + " has left the game.");
+                }
+                synchronized (scoreboard) {
+                    scoreboard.remove(playerName);
+                    broadcastScores();
                 }
                 try {
                     socket.close();
@@ -170,14 +202,19 @@ public class NewServer {
                 }
             }
         }
-private void broadcastMessage(String message) {
-    for (ClientHandler client : connectedPlayers) {
-        client.sendMessage(message);
-    }
-}
 
+        // Sends a message to this client.
         public void sendMessage(String message) {
             out.println(message);
+        }
+
+        // Broadcasts a message to all connected clients.
+        private void broadcastMessage(String message) {
+            synchronized (connectedPlayers) {
+                for (ClientHandler client : connectedPlayers) {
+                    client.sendMessage("PLAYER_LEFT:" + message);
+                }
+            }
         }
     }
 }

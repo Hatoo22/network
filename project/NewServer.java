@@ -8,6 +8,8 @@ public class NewServer {
     private static final int PORT = 12345;
     private static List<ClientHandler> connectedPlayers = new ArrayList<>();
     private static List<String> waitingRoom = new ArrayList<>();
+    private static List<String> gamePlayers = new ArrayList<>();
+
     private static boolean isTimerRunning = false;
     private static Timer timer;
     private static int countdownSeconds = 30;
@@ -54,18 +56,28 @@ public class NewServer {
 
     // بدء اللعبة لجميع اللاعبين في غرفة الانتظار.
     private static synchronized void startGame() {
-        String startMessage = "GAME_STARTED";
-        for (String player : waitingRoom) {
-            for (ClientHandler client : connectedPlayers) {
-                if (client.getPlayerName().equals(player)) {
-                    client.sendMessage(startMessage);
-                }
+    // Move waiting players to game players
+    gamePlayers = new ArrayList<>(waitingRoom);
+    waitingRoom.clear();
+    
+    // Initialize scores for game players
+    synchronized (scoreboard) {
+        for (String player : gamePlayers) {
+            scoreboard.put(player, 0);
+        }
+    }
+    
+    String startMessage = "GAME_STARTED";
+    synchronized (connectedPlayers) {
+        for (ClientHandler client : connectedPlayers) {
+            if (gamePlayers.contains(client.getPlayerName())) {
+                client.sendMessage(startMessage);
             }
         }
-        waitingRoom.clear();
-        updateAllClients();
     }
-
+    broadcastScores();
+    updateAllClients();
+}
     // فحص ما إذا كان يمكن بدء اللعبة.
     private static synchronized void checkAndStartGame() {
         if (waitingRoom.size() == 4) {
@@ -108,22 +120,25 @@ public class NewServer {
     }
 
     // إرسال النقاط المحدثة لجميع العملاء.
-    private static synchronized void broadcastScores() {
-        StringBuilder sb = new StringBuilder("SCORES:");
-        for (Map.Entry<String, Integer> entry : scoreboard.entrySet()) {
-            sb.append(entry.getKey()).append(":").append(entry.getValue()).append(",");
-        }
-        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ',') {
-            sb.deleteCharAt(sb.length() - 1);
-        }
-        String scoreMessage = sb.toString();
-        synchronized (connectedPlayers) {
-            for (ClientHandler client : connectedPlayers) {
-                client.sendMessage(scoreMessage);
+private static synchronized void broadcastScores() {
+    StringBuilder sb = new StringBuilder("SCORES:");
+    synchronized (gamePlayers) { // Ensure thread-safe iteration
+        synchronized (scoreboard) {
+            for (String player : gamePlayers) {
+                sb.append(player).append(":").append(scoreboard.get(player)).append(",");
             }
         }
     }
-
+    if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ',') {
+        sb.deleteCharAt(sb.length() - 1);
+    }
+    String scoreMessage = sb.toString();
+    synchronized (connectedPlayers) {
+        for (ClientHandler client : connectedPlayers) {
+            client.sendMessage(scoreMessage);
+        }
+    }
+}
     static class ClientHandler implements Runnable {
         private Socket socket;
         private PrintWriter out;
@@ -182,21 +197,39 @@ public class NewServer {
             } catch (IOException e) {
                 System.out.println("Connection lost with " + playerName);
             } finally {
-                synchronized (connectedPlayers) {
-                    connectedPlayers.remove(this);
-                    waitingRoom.remove(playerName);
-                    updateAllClients();
-                    broadcastScores();
-                }
-                synchronized (scoreboard) {
-                    scoreboard.remove(playerName);
-                }
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+    synchronized (connectedPlayers) {
+        connectedPlayers.remove(this);
+    }
+    synchronized (waitingRoom) {
+        waitingRoom.remove(playerName);
+    }
+    
+    boolean wasInGame = false;
+    synchronized (gamePlayers) {
+        wasInGame = gamePlayers.remove(playerName);
+    }
+    synchronized (scoreboard) {
+        scoreboard.remove(playerName);
+    }
+    
+    if (wasInGame) {
+        String leaveMessage = "PLAYER_LEFT:" + playerName;
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                client.sendMessage(leaveMessage);
             }
+        }
+    }
+    
+    updateAllClients();
+    broadcastScores();
+    
+    try {
+        socket.close();
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+}
         }
 
         // إرسال رسالة إلى هذا العميل.

@@ -9,12 +9,12 @@ public class NewServer {
     private static List<ClientHandler> connectedPlayers = new ArrayList<>();
     private static List<String> waitingRoom = new ArrayList<>();
     private static List<String> gamePlayers = new ArrayList<>();
+    private static final int MIN_PLAYERS_TO_CONTINUE = 2; // Added
 
     private static boolean isTimerRunning = false;
     private static Timer timer;
     private static int countdownSeconds = 30;
 
-    // خريطة لتخزين نقاط كل لاعب
     private static Map<String, Integer> scoreboard = new HashMap<>();
 
     public static void main(String[] args) {
@@ -33,7 +33,6 @@ public class NewServer {
         }
     }
 
-    // تحديث جميع العملاء بقوائم اللاعبين المتصلين والمنتظرين.
     private static void updateAllClients() {
         String connectedList = "CONNECTED:" + getConnectedPlayerNames();
         String waitingList = "WAITING:" + String.join(",", waitingRoom);
@@ -45,7 +44,6 @@ public class NewServer {
         }
     }
 
-    // الحصول على قائمة الأسماء المتصلة كقائمة مفصولة بفواصل.
     private static String getConnectedPlayerNames() {
         List<String> names = new ArrayList<>();
         for (ClientHandler client : connectedPlayers) {
@@ -54,31 +52,48 @@ public class NewServer {
         return String.join(",", names);
     }
 
-    // بدء اللعبة لجميع اللاعبين في غرفة الانتظار.
     private static synchronized void startGame() {
-    // Move waiting players to game players
-    gamePlayers = new ArrayList<>(waitingRoom);
-    waitingRoom.clear();
-    
-    // Initialize scores for game players
-    synchronized (scoreboard) {
-        for (String player : gamePlayers) {
-            scoreboard.put(player, 0);
-        }
-    }
-    
-    String startMessage = "GAME_STARTED";
-    synchronized (connectedPlayers) {
-        for (ClientHandler client : connectedPlayers) {
-            if (gamePlayers.contains(client.getPlayerName())) {
-                client.sendMessage(startMessage);
+        gamePlayers = new ArrayList<>(waitingRoom);
+        waitingRoom.clear();
+        
+        synchronized (scoreboard) {
+            for (String player : gamePlayers) {
+                scoreboard.put(player, 0);
             }
         }
+        
+        String startMessage = "GAME_STARTED";
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                if (gamePlayers.contains(client.getPlayerName())) {
+                    client.sendMessage(startMessage);
+                }
+            }
+        }
+        broadcastScores();
+        updateAllClients();
     }
-    broadcastScores();
-    updateAllClients();
-}
-    // فحص ما إذا كان يمكن بدء اللعبة.
+
+    // New method added
+    private static synchronized void endGamePrematurely() {
+        if (gamePlayers.isEmpty()) return;
+        
+        String winner = gamePlayers.get(0);
+        String endMessage = "GAME_ENDED:" + winner + " wins by default!";
+        
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                if (gamePlayers.contains(client.getPlayerName())) {
+                    client.sendMessage(endMessage);
+                }
+            }
+        }
+        
+        gamePlayers.clear();
+        updateAllClients();
+        broadcastScores();
+    }
+
     private static synchronized void checkAndStartGame() {
         if (waitingRoom.size() == 4) {
             if (timer != null) {
@@ -91,7 +106,6 @@ public class NewServer {
         }
     }
 
-    // بدء عد تنازلي.
     private static void startCountdownTimer() {
         if (isTimerRunning) return;
         isTimerRunning = true;
@@ -119,26 +133,26 @@ public class NewServer {
         }, 0, 1000);
     }
 
-    // إرسال النقاط المحدثة لجميع العملاء.
-private static synchronized void broadcastScores() {
-    StringBuilder sb = new StringBuilder("SCORES:");
-    synchronized (gamePlayers) { // Ensure thread-safe iteration
-        synchronized (scoreboard) {
-            for (String player : gamePlayers) {
-                sb.append(player).append(":").append(scoreboard.get(player)).append(",");
+    private static synchronized void broadcastScores() {
+        StringBuilder sb = new StringBuilder("SCORES:");
+        synchronized (gamePlayers) {
+            synchronized (scoreboard) {
+                for (String player : gamePlayers) {
+                    sb.append(player).append(":").append(scoreboard.get(player)).append(",");
+                }
+            }
+        }
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ',') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        String scoreMessage = sb.toString();
+        synchronized (connectedPlayers) {
+            for (ClientHandler client : connectedPlayers) {
+                client.sendMessage(scoreMessage);
             }
         }
     }
-    if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ',') {
-        sb.deleteCharAt(sb.length() - 1);
-    }
-    String scoreMessage = sb.toString();
-    synchronized (connectedPlayers) {
-        for (ClientHandler client : connectedPlayers) {
-            client.sendMessage(scoreMessage);
-        }
-    }
-}
+
     static class ClientHandler implements Runnable {
         private Socket socket;
         private PrintWriter out;
@@ -160,7 +174,6 @@ private static synchronized void broadcastScores() {
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 out = new PrintWriter(socket.getOutputStream(), true);
 
-                // طلب اسم اللاعب
                 out.println("ENTER_NAME");
                 playerName = in.readLine();
                 synchronized (scoreboard) {
@@ -197,42 +210,46 @@ private static synchronized void broadcastScores() {
             } catch (IOException e) {
                 System.out.println("Connection lost with " + playerName);
             } finally {
-    synchronized (connectedPlayers) {
-        connectedPlayers.remove(this);
-    }
-    synchronized (waitingRoom) {
-        waitingRoom.remove(playerName);
-    }
-    
-    boolean wasInGame = false;
-    synchronized (gamePlayers) {
-        wasInGame = gamePlayers.remove(playerName);
-    }
-    synchronized (scoreboard) {
-        scoreboard.remove(playerName);
-    }
-    
-    if (wasInGame) {
-        String leaveMessage = "PLAYER_LEFT:" + playerName;
-        synchronized (connectedPlayers) {
-            for (ClientHandler client : connectedPlayers) {
-                client.sendMessage(leaveMessage);
+                synchronized (connectedPlayers) {
+                    connectedPlayers.remove(this);
+                }
+                synchronized (waitingRoom) {
+                    waitingRoom.remove(playerName);
+                }
+                
+                boolean wasInGame = false;
+                synchronized (gamePlayers) {
+                    wasInGame = gamePlayers.remove(playerName);
+                }
+                synchronized (scoreboard) {
+                    scoreboard.remove(playerName);
+                }
+                
+                if (wasInGame) {
+                    String leaveMessage = "PLAYER_LEFT:" + playerName;
+                    synchronized (connectedPlayers) {
+                        for (ClientHandler client : connectedPlayers) {
+                            client.sendMessage(leaveMessage);
+                        }
+                    }
+                    
+                    // Added: Check if game should end when players leave
+                    if (gamePlayers.size() < MIN_PLAYERS_TO_CONTINUE && gamePlayers.size() > 0) {
+                        endGamePrematurely();
+                    }
+                }
+                
+                updateAllClients();
+                broadcastScores();
+                
+                try {
+                    socket.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
-    }
-    
-    updateAllClients();
-    broadcastScores();
-    
-    try {
-        socket.close();
-    } catch (IOException e) {
-        e.printStackTrace();
-    }
-}
-        }
 
-        // إرسال رسالة إلى هذا العميل.
         public void sendMessage(String message) {
             out.println(message);
         }
